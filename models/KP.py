@@ -1,32 +1,14 @@
 import torch
 from classes.MLP import MultiLayerPerceptron
 
-
 #@Josh Tindall's implementation
 
-class FeedbackAlignmentFunction(torch.autograd.Function):
+class KolenPollackFunction(torch.autograd.Function):
   """
   Gradient computing function class for Hebbian learning.
   """
-
   @staticmethod
   def forward(context, input, weight, backwards_weight, bias=None, nonlinearity=None, nonlinearity_deriv=None, target=None):
-    """
-    Forward pass method for the layer. Computes the output of the layer and
-    stores variables needed for the backward pass.
-
-    Arguments:
-    - context (torch context): context in which variables can be stored for
-      the backward pass.
-    - input (torch tensor): input to the layer.
-    - weight (torch tensor): layer weights.
-    - bias (torch tensor, optional): layer biases.
-    - nonlinearity (torch functional, optional): nonlinearity for the layer.
-    - target (torch tensor, optional): layer target, if applicable.
-
-    Returns:
-    - output (torch tensor): layer output.
-    """
     activation_deriv = None
 
     # compute the output for the layer (linear layer with non-linearity)
@@ -46,39 +28,18 @@ class FeedbackAlignmentFunction(torch.autograd.Function):
     else:
       output = preactivations
 
+    # calculate the output to use for the backward pass
+    output_for_update = output if target is None else target
+
     # store variables in the context for the backward pass
-    context.save_for_backward(input, weight, backwards_weight, bias, activation_deriv, target)
+    context.save_for_backward(input, weight, backwards_weight, bias, activation_deriv, output_for_update)
 
     return output
 
   @staticmethod
   def backward(context, grad_output=None):
-    """
-    Backward pass method for the layer. Computes and returns the gradients for
-    all variables passed to forward (returning None if not applicable).
 
-    Arguments:
-    - context (torch context): context in which variables can be stored for
-      the backward pass.
-    - input (torch tensor): input to the layer.
-    - weight (torch tensor): layer weights.
-    - bias (torch tensor, optional): layer biases.
-    - nonlinearity (torch functional, optional): nonlinearity for the layer.
-    - target (torch tensor, optional): layer target, if applicable.
-
-    Returns:
-    - grad_input (None): gradients for the input (None, since gradients are not
-      backpropagated in Hebbian learning).
-    - grad_weight (torch tensor): gradients for the weights.
-    - grad_bias (torch tensor or None): gradients for the biases, if they aren't
-      None.
-    - grad_nonlinearity (None): gradients for the nonlinearity (None, since
-      gradients do not apply to the non-linearities).
-    - grad_target (None): gradients for the targets (None, since
-      gradients do not apply to the targets).
-    """
-
-    input, weight, backwards_weight, bias, activation_deriv, target = context.saved_tensors
+    input, weight, backwards_weight, bias, activation_deriv, output_for_update = context.saved_tensors
     grad_input = None
     grad_weight = None
     grad_bias = None
@@ -93,12 +54,25 @@ class FeedbackAlignmentFunction(torch.autograd.Function):
     if input_needs_grad:
       grad_input = (grad_output * activation_deriv).mm(backwards_weight.t()) #np.dot(backwards_weight, grad_output * activation_deriv)
 
+      # take the negative, as the gradient will be subtracted
+      grad_input = grad_input
+
     # Calculate gradient with respect to weights
     weight_needs_grad = context.needs_input_grad[1]
     if weight_needs_grad:
-      grad_weight = (input.t()).mm(grad_output * activation_deriv) #np.dot(grad_output * activation_deriv, input.transpose())
+      undecayed_grad_weight = (input.t()).mm(grad_output * activation_deriv) #np.dot(grad_output * activation_deriv, input.transpose())
 
-      grad_weight = grad_weight / len(input) # average across batch
+      undecayed_grad_weight = undecayed_grad_weight / len(input) # average across batch
+
+      # print(undecayed_grad_weight.shape)
+      # print(weight.shape)
+      grad_weight = undecayed_grad_weight - 0.1 * weight.t()
+
+    # Calculate gradient with respect to BACKWARDS weights
+    weight_needs_grad = context.needs_input_grad[1]
+    if weight_needs_grad:
+
+      grad_backwards_weight = undecayed_grad_weight.t() - 0.1 * backwards_weight.t()
 
     # Calculate gradient with respect to biases
     if bias is not None:
@@ -106,31 +80,19 @@ class FeedbackAlignmentFunction(torch.autograd.Function):
       if bias_needs_grad:
         grad_bias = (grad_output * activation_deriv).sum(dim=0) / len(input)
 
-    return grad_input, grad_weight.t(), grad_backwards_weight, grad_bias, grad_nonlinearity, grad_nonlinearity_deriv, grad_target
+    return grad_input, grad_weight.t(), grad_backwards_weight.t(), grad_bias, grad_nonlinearity, grad_nonlinearity_deriv, grad_target
 
 
-class FeedbackAlignmentPerceptron(MultiLayerPerceptron):
-  """
-  Hebbian multilayer perceptron with one hidden layer.
-  """
+
+class KolenPollackPerceptron(MultiLayerPerceptron):
 
   def __init__(self, **kwargs):
-    """
-    Initializes a Hebbian multilayer perceptron object
-
-    Arguments:
-    - clamp_output (bool, optional): if True, outputs are clamped to targets,
-      if available, when computing weight updates.
-    """
     super().__init__(**kwargs)
 
     self.lin1_B = torch.nn.Linear(self.num_hidden, self.num_inputs, bias=self.bias)
     self.lin2_B = torch.nn.Linear(self.num_outputs, self.num_hidden, bias=self.bias)
 
   def activation_deriv(self, x):
-    """
-    Sets the activation function used for the hidden layers.
-    """
     if self.activation_type.lower() == "relu":
       derivative = 1.0 * (x > 0) # maps to positive
     elif self.activation_type.lower() == "sigmoid":
@@ -155,19 +117,8 @@ class FeedbackAlignmentPerceptron(MultiLayerPerceptron):
 
 
   def forward(self, X, y=None):
-    """
-    Runs a forward pass through the network.
-
-    Arguments:
-    - X (torch.Tensor): Batch of input images.
-    - y (torch.Tensor, optional): Batch of targets, stored for the backward
-      pass to compute the gradients for the last layer.
-
-    Returns:
-    - y_pred (torch.Tensor): Predicted targets.
-    """
-
-    h = FeedbackAlignmentFunction.apply(
+    
+    h = KolenPollackFunction.apply(
         X.reshape(-1, self.num_inputs),
         self.lin1.weight,
         self.lin1_B.weight,
@@ -187,7 +138,7 @@ class FeedbackAlignmentPerceptron(MultiLayerPerceptron):
           ).float()
       output_deriv = self.softmax_deriv
 
-    y_pred = FeedbackAlignmentFunction.apply(
+    y_pred = KolenPollackFunction.apply(
         h,
         self.lin2.weight,
         self.lin2_B.weight,
@@ -198,5 +149,3 @@ class FeedbackAlignmentPerceptron(MultiLayerPerceptron):
     )
 
     return y_pred
-
-
