@@ -1,15 +1,20 @@
 import torch
 
+NUM_INPUTS = 10
+NUM_HIDDEN = 100
+NUM_OUTPUTS = 2
+ACTIVATION_TYPE = 'sigmoid'
+BIAS = False
 
 class MultiLayerPerceptron(torch.nn.Module):
 
     def __init__(
         self,
         num_inputs=NUM_INPUTS,
-        num_hidden=100,
+        num_hidden=NUM_HIDDEN,
         num_outputs=NUM_OUTPUTS,
-        activation_type='sigmoid',
-        bias=False,
+        activation_type=ACTIVATION_TYPE,
+        bias=BIAS,
     ):
         super().__init__()
 

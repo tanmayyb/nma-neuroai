@@ -48,7 +48,7 @@ from models.FA import *
 # load ff fa model
 # model = LinearFANetwork()
 
-model = LinearFANetwork(
+model = FANetwork(
     in_features=784, 
     num_layers=2, 
     num_hidden_list=[1000, 10]

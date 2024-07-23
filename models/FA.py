@@ -5,81 +5,127 @@ from torch import autograd
 from torch.autograd import Variable
 
 
-class LinearFAFunction(autograd.Function):
+#@Josh Tindall's implementation
+
+class FAFunction(autograd.Function):
 
     @staticmethod
-    def forward(context, input, weight, weight_fa, bias=None):
-        context.save_for_backward(input, weight, weight_fa, bias)
-        output = input.mm(weight.t())
+    def forward(context, input, weight, backwards_weight, bias=None, nonlinearity=None, nonlinearity_deriv=None, target=None):
+        activation_deriv = None
+
+        # compute the output for the layer (linear layer with non-linearity)
+        preactivations = input.mm(weight.t())
+
         if bias is not None:
-            output += bias.unsqueeze(0).expand_as(output)
+            preactivations += bias.unsqueeze(0).expand_as(preactivations)
+
+        if nonlinearity_deriv is not None:
+            if target is not None:
+                activation_deriv = nonlinearity_deriv(preactivations, target)
+            else:
+                activation_deriv = nonlinearity_deriv(preactivations)
+
+        if nonlinearity is not None:
+            output = nonlinearity(preactivations)
+        else:
+            output = preactivations
+
+        # store variables in the context for the backward pass
+        context.save_for_backward(input, weight, backwards_weight, bias, activation_deriv, target)
+
         return output
     
     @staticmethod
-    def backward(context, grad_output):
-        input, weight, weight_fa, bias = context.saved_variables
-        grad_input = grad_weight = grad_weight_fa = grad_bias = None
+    def backward(context, grad_output=None):
+        input, weight, backwards_weight, bias, activation_deriv, target = context.saved_tensors
+        grad_input = grad_weight = grad_bias = grad_nonlinearity = grad_target = grad_backwards_weight = grad_nonlinearity_deriv = None 
 
-        if context.needs_input_grad[0]:
-            grad_input = grad_output.mm(weight_fa.to(grad_output.device))
+        # Calculate gradient with respect to inputs (for passing error signals to upstream layers)
+        input_needs_grad = context.needs_input_grad[0]
+        if input_needs_grad:
+            grad_input = (grad_output * activation_deriv).mm(backwards_weight.t()) #np.dot(backwards_weight, grad_output * activation_deriv)
 
-        if context.needs_input_grad[1]:
-            grad_weight = grad_output.t().mm(input)
-        
-        if bias is not None and context.needs_input_grad[3]:
-            grad_bias = grad_output.sum(0).squeeze(0)
+        # Calculate gradient with respect to weights
+        weight_needs_grad = context.needs_input_grad[1]
+        if weight_needs_grad:
+            grad_weight = (input.t()).mm(grad_output * activation_deriv) #np.dot(grad_output * activation_deriv, input.transpose())
 
-        return grad_input, grad_weight, grad_weight_fa, grad_bias
+        grad_weight = grad_weight / len(input) # average across batch
+
+        # Calculate gradient with respect to biases
+        if bias is not None:
+            bias_needs_grad = context.needs_input_grad[2]
+            if bias_needs_grad:
+                grad_bias = (grad_output * activation_deriv).sum(dim=0) / len(input)
+
+        return grad_input, grad_weight.t(), grad_backwards_weight, grad_bias, grad_nonlinearity, grad_nonlinearity_deriv, grad_target
 
 
-class LinearFAModule(nn.Module):
 
-    def __init__(self, input_features, output_features, bias=True):
-        super().__init__()
+from classes.MLP import MultiLayerPerceptron as MLP
+class FANetwork(MLP):
 
-        self.input_features = input_features
-        self.output_features = output_features
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
-        self.weight = nn.Parameter(torch.Tensor(output_features, input_features,))
+        self.lin1_B = torch.nn.Linear(self.num_hidden, self.num_inputs, bias=self.bias)
+        self.lin2_B = torch.nn.Linear(self.num_outputs, self.num_hidden, bias=self.bias)
 
-        if bias:
-            self.bias = nn.Parameter(torch.Tensor(output_features))
+    def activation_deriv(self, x):
+        """
+        Sets the activation function used for the hidden layers.
+        """
+        if self.activation_type.lower() == "relu":
+            derivative = 1.0 * (x > 0) # maps to positive
+        elif self.activation_type.lower() == "sigmoid":
+            activations = self.activation(x)
+            derivative = activations * (1 - activations) # maps to same
+        elif self.activation_type.lower() == "identity":
+            derivative = torch.ones_like(x) # maps to same
         else:
-            self.register_parameter('bias', None)
-
-        self.weight_fa = Variable(torch.FloatTensor(output_features, input_features), requires_grad=False)
-
-        torch.nn.init.kaiming_uniform(self.weight)
-        torch.nn.init.kaiming_uniform(self.weight_fa)
-        torch.nn.init.constant(self.bias, 1)
-
-    def forward(self, input):
-        return LinearFAFunction.apply(input, self.weight, self.weight_fa, self.bias)
+            raise NotImplementedError(
+                f"{self.activation_type} activation type not recognized. Only "
+                "'relu' and 'identity' have been implemented so far."
+            )
+        return derivative
 
 
-class LinearFANetwork(nn.Module):
+    def softmax_deriv(self, x, target):
+        output = self.softmax(x)
+        derivative = output * (target - output)
+        return derivative
+    
 
-    def __init__(self, in_features, num_layers, num_hidden_list):
-        super().__init__()
+    def forward(self, X, y=None):
+        h = FAFunction.apply(
+            X.reshape(
+                -1, self.num_inputs
+            ),
+            self.lin1.weight,
+            self.lin1_B.weight,
+            self.lin1.bias,
+            self.activation,
+            self.activation_deriv,
+        )
 
-        self.in_features = in_features
-        self.num_layers = num_layers
-        self.num_hidden_list = num_hidden_list
+        if y is None:
+            target=None
+            output_deriv=None
+        else:
+            targets = torch.nn.functional.one_hot(
+                y, num_classes=self.num_outputs
+            ).float()
+            output_deriv = self.softmax_deriv
 
-        # first hiddent layer
-        self.linear = [LinearFAModule(self.in_features, self.num_hidden_list[0])]
-        for idx in range(self.num_layers - 1):
-            # middle hidden layers
-            self.linear.append(LinearFAModule(self.num_hidden_list[idx], self.num_hidden_list[idx+1]))
+        y_pred = FAFunction.apply(
+            h,
+            self.lin2.weight,
+            self.lin2_B.weight,
+            self.lin2.bias,
+            self.softmax,
+            output_deriv, #self.softmax_deriv
+            targets
+        )        
+        
+        return y_pred
 
-        # register module list 
-        self.linear = nn.ModuleList(self.linear)
-
-    def forward(self, inputs):
-
-        # first hidden layer
-        linear1 = self.linear[0](inputs)
-        # other hidden layers        
-        linear2 = self.linear[1](linear1)
-
-        return linear2

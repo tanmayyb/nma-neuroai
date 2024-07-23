@@ -5,6 +5,7 @@ from torch import autograd
 from torch.autograd import Variable
 
 
+#Feedback alignment: https://github.com/L0SG/feedback-alignment-pytorch/blob/master/lib/fa_linear.py
 class LinearFAFunction(autograd.Function):
 
     @staticmethod
