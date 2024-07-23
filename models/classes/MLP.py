@@ -52,7 +52,6 @@ class MultiLayerPerceptron(torch.nn.Module):
             )
         
     def forward(self, X, y=None):
-
         h = self.activation(self.lin1(X.reshape(-1, self.num_inputs)))
         y_pred = self.softmax(self.lin2(h))
         return y_pred
@@ -62,7 +61,7 @@ class MultiLayerPerceptron(torch.nn.Module):
         y_pred = self.softmax(self.lin2(h))
         return y_pred
 
-    def list_parameters(self):
+    def list_parameters(self) -> list:
         params_list = list()
 
         for layer_str in ['lin1', 'lin2']:
@@ -72,15 +71,18 @@ class MultiLayerPerceptron(torch.nn.Module):
 
         return params_list
     
-    def gather_gradient_dict(self):
+    def gather_gradient_dict(self) -> dict:
         
         params_list = self.list_parameters()
+        
         gradient_dict = dict()
-
         for param_name in params_list:
             layer_str, param_str = param_name.split('_')
             layer = getattr(self, layer_str)
             grad = getattr(layer, param_str)
-            grad getattr(layer, param_str).grad
-
+            if grad is None:
+                raise RuntimeError("No gradient was computed")
+            gradient_dict[param_name] = grad.detach().clone().numpy()
+        
+        return gradient_dict
 
