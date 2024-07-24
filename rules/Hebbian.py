@@ -1,5 +1,5 @@
 import torch
-from classes.MLP import MultiLayerPerceptron
+from .classes.MLP import MultiLayerPerceptron
 
 
 
@@ -48,19 +48,19 @@ class HebbianFunction(torch.autograd.Function):
 
         if bias is not None:
             bias_needs_grad = context.needs_input_grad[2]
-        if bias_needs_grad:
-            grad_bias = output_for_update.mean(axis=0) # average across batch
+            if bias_needs_grad:
+                grad_bias = output_for_update.mean(axis=0) # average across batch
 
-            # center around 0
-            grad_bias = grad_bias - grad_bias.mean()
+                # center around 0
+                grad_bias = grad_bias - grad_bias.mean()
 
-            ## or apply an adaptation of Oja's rule for biases
-            ## (not compatible with clamping outputs to the targets!)
-            # oja_subtract = (output_for_update.pow(2) * bias).mean(axis=0)
-            # grad_bias = grad_bias - oja_subtract
+                ## or apply an adaptation of Oja's rule for biases
+                ## (not compatible with clamping outputs to the targets!)
+                # oja_subtract = (output_for_update.pow(2) * bias).mean(axis=0)
+                # grad_bias = grad_bias - oja_subtract
 
-            # take the negative, as the gradient will be subtracted
-            grad_bias = -grad_bias
+                # take the negative, as the gradient will be subtracted
+                grad_bias = -grad_bias
 
         return grad_input, grad_weight, grad_bias, grad_nonlinearity, grad_target
 
@@ -75,7 +75,7 @@ class HebbianNetwork(MultiLayerPerceptron):
         # return super().forward(X, y)
 
         h = HebbianFunction.apply(
-            X.reshape(-1, self.num_inputs).
+            X.reshape(-1, self.num_inputs),
             self.lin1.weight,
             self.lin1.bias,
             self.activation,

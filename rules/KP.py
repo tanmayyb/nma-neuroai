@@ -1,5 +1,5 @@
 import torch
-from classes.MLP import MultiLayerPerceptron
+from .classes.MLP import MultiLayerPerceptron
 
 #@Josh Tindall's implementation
 
