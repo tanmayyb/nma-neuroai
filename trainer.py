@@ -9,8 +9,15 @@ from tqdm import tqdm
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 BATCH_SIZE = 32
-TRAIN_MODEL = 'FA'
 epochs = 10
+
+RULE_SELECT = 'hebb'
+NUM_INPUTS = 784
+NUM_HIDDEN = 100
+NUM_OUTPUTS = 10
+ACTIVATION_TYPE = 'sigmoid'
+BIAS = False
+
 
 
 # download/load train dataset
@@ -44,15 +51,35 @@ test_loader = DataLoader(
 )
 
 
-from models.FA import *
-# load ff fa model
-# model = LinearFANetwork()
 
-model = FANetwork(
-    in_features=784, 
-    num_layers=2, 
-    num_hidden_list=[1000, 10]
-).to(device)
+if RULE_SELECT == 'hebb':
+
+    # from models.FA import *
+
+    # model = FANetwork(
+    #     in_features=784, 
+    #     num_layers=2, 
+    #     num_hidden_list=[1000, 10]
+    # ).to(device)
+
+    from rules.Hebbian import HebbianNetwork
+
+    model = HebbianNetwork(
+        num_inputs=NUM_INPUTS,
+        num_hidden=NUM_HIDDEN,
+        num_outputs=NUM_OUTPUTS,
+        clamp_output=False,
+        bias=BIAS,
+    ).to(device)
+
+else:
+    raise NotImplementedError("Selected Rule does not exist!")
+
+
+
+
+# def train_model(model, train_loader.)
+
 
 optimizer = torch.optim.SGD(
     model.parameters(),
@@ -78,5 +105,7 @@ for epoch in tqdm(range(epochs)):
 
         # if (...):
         #     logging...
+
+
 
 
